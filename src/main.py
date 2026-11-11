@@ -15,6 +15,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 from tkinter import messagebox
 
@@ -69,10 +70,103 @@ def configure_windows_app_id() -> None:
             logging.exception("Could not set Windows AppUserModelID")
 
 
-class KlikzApp(ctk.CTk):
+class SingleInstanceGuard:
+    """Allow one Klikz process per Windows session and notify it to reopen."""
+
+    MUTEX_NAME = r"Local\Klikz.Desktop.AutoClicker.SingleInstance"
+    REOPEN_EVENT_NAME = r"Local\Klikz.Desktop.AutoClicker.Reopen"
+    ERROR_ALREADY_EXISTS = 183
+    EVENT_MODIFY_STATE = 0x0002
+    WAIT_OBJECT_0 = 0x00000000
+
     def __init__(self) -> None:
+        self._mutex_handle: int | None = None
+        self._event_handle: int | None = None
+        self._kernel32 = None
+
+        if sys.platform != "win32":
+            return
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateEventW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.CreateEventW.restype = ctypes.c_void_p
+        kernel32.OpenEventW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.OpenEventW.restype = ctypes.c_void_p
+        kernel32.SetEvent.argtypes = [ctypes.c_void_p]
+        kernel32.SetEvent.restype = ctypes.c_int
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        self._kernel32 = kernel32
+
+    def acquire(self) -> bool:
+        """Return False on a second launch after notifying the first process."""
+        if self._kernel32 is None:
+            return True
+
+        mutex = self._kernel32.CreateMutexW(None, False, self.MUTEX_NAME)
+        if not mutex:
+            raise OSError(ctypes.get_last_error(), "Could not create Klikz single-instance mutex")
+
+        already_running = ctypes.get_last_error() == self.ERROR_ALREADY_EXISTS
+        if already_running:
+            self._kernel32.CloseHandle(mutex)
+            self._notify_running_instance()
+            return False
+
+        self._mutex_handle = mutex
+        reopen_event = self._kernel32.CreateEventW(None, False, False, self.REOPEN_EVENT_NAME)
+        if not reopen_event:
+            error = ctypes.get_last_error()
+            self.close()
+            raise OSError(error, "Could not create Klikz reopen event")
+
+        self._event_handle = reopen_event
+        return True
+
+    def _notify_running_instance(self) -> None:
+        """Ask the first process to restore its existing window (even from tray)."""
+        assert self._kernel32 is not None
+        # The first process may still be starting, so its event may not yet exist.
+        for _ in range(20):
+            event = self._kernel32.OpenEventW(
+                self.EVENT_MODIFY_STATE, False, self.REOPEN_EVENT_NAME
+            )
+            if event:
+                try:
+                    if not self._kernel32.SetEvent(event):
+                        logging.warning("Could not request existing Klikz window")
+                finally:
+                    self._kernel32.CloseHandle(event)
+                return
+            time.sleep(0.1)
+        logging.warning("Klikz is running, but its reopen event was not available")
+
+    def reopen_requested(self) -> bool:
+        """Non-blocking check, called only from the Tkinter UI thread."""
+        if self._kernel32 is None or self._event_handle is None:
+            return False
+        return self._kernel32.WaitForSingleObject(self._event_handle, 0) == self.WAIT_OBJECT_0
+
+    def close(self) -> None:
+        if self._kernel32 is None:
+            return
+        if self._event_handle is not None:
+            self._kernel32.CloseHandle(self._event_handle)
+            self._event_handle = None
+        if self._mutex_handle is not None:
+            self._kernel32.CloseHandle(self._mutex_handle)
+            self._mutex_handle = None
+
+
+class KlikzApp(ctk.CTk):
+    def __init__(self, instance_guard: SingleInstanceGuard) -> None:
         ctk.set_appearance_mode("light")
         super().__init__()
+        self._instance_guard = instance_guard
         self.title(APP_NAME)
         self.geometry("392x560")
         self.resizable(False, False)
@@ -146,6 +240,7 @@ class KlikzApp(ctk.CTk):
         self._listener.daemon = True
         self._listener.start()
         self.after(100, self._process_messages)
+        self.after(200, self._check_reopen_request)
         logging.info("Klikz started")
 
     def _build_ui(self) -> None:
@@ -336,6 +431,13 @@ class KlikzApp(ctk.CTk):
             pass
         self.after(100, self._process_messages)
 
+    def _check_reopen_request(self) -> None:
+        if self._exiting:
+            return
+        if self._instance_guard.reopen_requested():
+            self.show_window()
+        self.after(200, self._check_reopen_request)
+
     def _run_tray(self) -> None:
         try:
             self._tray.run()
@@ -462,13 +564,19 @@ class KlikzApp(ctk.CTk):
 
 def main() -> None:
     configure_logging()
-    configure_windows_app_id()
+    guard = SingleInstanceGuard()
     try:
-        app = KlikzApp()
+        if not guard.acquire():
+            # The existing window has been asked to reopen; exit quietly.
+            return
+        configure_windows_app_id()
+        app = KlikzApp(guard)
         app.mainloop()
     except Exception:
         logging.exception("Fatal error")
         raise
+    finally:
+        guard.close()
 
 
 if __name__ == "__main__":
