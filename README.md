@@ -194,3 +194,11 @@ Folder hasil generate seperti `.venv/`, `build/`, dan `dist/` tidak dimasukkan k
 
 Dikembangkan oleh **Faqih Fadillah**.  
 Menggunakan [MIT License](LICENSE). Copyright © 2026 Faqih Fadillah.
+
+## Screenshots / Tampilan Aplikasi
+
+### Main Window / Tampilan Utama
+![Klikz Main Window](screenshots/main-window.png)
+
+### About Window / Tentang Aplikasi
+![Klikz About](screenshots/about.png)
