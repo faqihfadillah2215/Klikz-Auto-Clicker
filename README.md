@@ -1,3 +1,5 @@
+Link : https://github.com/faqihfadillah2215/Klikz-Auto-Clicker/releases/download/v1.0.0/Klikz.exe
+
 # Klikz
 
 **A lightweight auto-clicker desktop application for Windows, built with Python.**  
