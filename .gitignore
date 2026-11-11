@@ -1,0 +1,45 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build output and distributables
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.spec
+
+# Logs and coverage
+*.log
+.coverage
+.coverage.*
+htmlcov/
+
+# Local secrets and environment settings
+.env
+.env.*
+!.env.example
+
+# IDE/editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*~
